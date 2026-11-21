@@ -1,0 +1,122 @@
+---
+- name: Write the transit config
+  ansible.builtin.template:
+    src: transit.hcl.j2
+    dest: /etc/vault.d/vault.hcl
+    owner: vault
+    group: vault
+    mode: "0640"
+  notify: Restart vault
+
+- name: Apply any config or certificate change before starting
+  ansible.builtin.meta: flush_handlers
+
+- name: Start Vault
+  ansible.builtin.systemd_service:
+    name: vault
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Wait for Vault to answer
+  ansible.builtin.uri:
+    url: "{{ transit_url }}/sys/seal-status"
+  register: transit_status
+  retries: 10
+  delay: 3
+  until: transit_status.status == 200
+
+- name: Initialise the transit node (first run only)
+  ansible.builtin.uri:
+    url: "{{ transit_url }}/sys/init"
+    method: PUT
+    body_format: json
+    body:
+      secret_shares: "{{ transit_key_shares | int }}"
+      secret_threshold: "{{ transit_key_threshold | int }}"
+  register: transit_init
+  when: not transit_status.json.initialized
+  no_log: true
+
+- name: Save unseal keys and root token on your machine
+  ansible.builtin.copy:
+    content: "{{ transit_init.json | to_nice_json }}"
+    dest: "{{ secrets_dir }}/transit-keys.json"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: not transit_status.json.initialized
+  no_log: true
+
+- name: Load the saved keys
+  ansible.builtin.set_fact:
+    transit_keys: "{{ lookup('file', secrets_dir ~ '/transit-keys.json') | from_json }}"
+  no_log: true
+
+- name: Unseal the transit node
+  ansible.builtin.uri:
+    url: "{{ transit_url }}/sys/unseal"
+    method: PUT
+    body_format: json
+    body: { key: "{{ item }}" }
+  loop: "{{ transit_keys.keys_base64[: transit_key_threshold | int] }}"
+  no_log: true
+
+- name: Enable the transit engine (ignore if already enabled)
+  ansible.builtin.uri:
+    url: "{{ transit_url }}/sys/mounts/transit"
+    method: POST
+    headers: { X-Vault-Token: "{{ transit_keys.root_token }}" }
+    body_format: json
+    body: { type: transit }
+    status_code: [204, 400]
+  no_log: true
+
+- name: Create the auto-unseal key
+  ansible.builtin.uri:
+    url: "{{ transit_url }}/transit/keys/autounseal"
+    method: POST
+    headers: { X-Vault-Token: "{{ transit_keys.root_token }}" }
+    status_code: [200, 204]
+  no_log: true
+
+- name: Create a policy that can only use that key
+  ansible.builtin.uri:
+    url: "{{ transit_url }}/sys/policies/acl/autounseal"
+    method: PUT
+    headers: { X-Vault-Token: "{{ transit_keys.root_token }}" }
+    body_format: json
+    body:
+      policy: |
+        path "transit/encrypt/autounseal" { capabilities = ["update"] }
+        path "transit/decrypt/autounseal" { capabilities = ["update"] }
+    status_code: 204
+  no_log: true
+
+- name: Check whether a token already exists
+  ansible.builtin.stat:
+    path: "{{ secrets_dir }}/autounseal-token"
+  delegate_to: localhost
+  become: false
+  register: transit_token_file
+
+- name: Create the token the Vault nodes use to unseal
+  ansible.builtin.uri:
+    url: "{{ transit_url }}/auth/token/create-orphan"
+    method: POST
+    headers: { X-Vault-Token: "{{ transit_keys.root_token }}" }
+    body_format: json
+    body: { policies: [autounseal], period: 24h, no_default_policy: true }
+  register: transit_token
+  when: not transit_token_file.stat.exists
+  no_log: true
+
+- name: Save the token on your machine
+  ansible.builtin.copy:
+    content: "{{ transit_token.json.auth.client_token }}"
+    dest: "{{ secrets_dir }}/autounseal-token"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: not transit_token_file.stat.exists
+  no_log: true

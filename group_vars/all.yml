@@ -1,0 +1,27 @@
+---
+# Vault version. The zip is downloaded into ./files/ automatically if it is missing
+# (or put it there yourself if the control machine has no internet).
+vault_version: "1.20.4"
+vault_zip: "vault_{{ vault_version }}_linux_amd64.zip"
+
+# Transit unseal keys: 3 keys, any 2 unseal it
+transit_key_shares: 3
+transit_key_threshold: 2
+
+# Public URL served by HAProxy with a Let's Encrypt certificate.
+# Its DNS A record must point at the load balancer, and port 80 must be reachable
+# from the internet so Let's Encrypt can check it (HTTP-01).
+public_domain: group3assessment.online
+letsencrypt_email: admin@example.com
+
+# IP that Vault traffic uses between servers: private_ip from the inventory if set
+# (recommended on AWS), otherwise the IP Ansible connects to.
+vault_ip: "{{ private_ip | default(ansible_host) }}"
+
+# Load balancer internal IP (Vault trusts X-Forwarded-For from it)
+lb_ip: "{{ hostvars[groups['lb'][0]]['vault_ip'] }}"
+transit_ip: "{{ hostvars[groups['transit'][0]]['vault_ip'] }}"
+
+# Where Ansible keeps certificates and keys on YOUR machine
+pki_dir: "{{ playbook_dir }}/pki"
+secrets_dir: "{{ playbook_dir }}/secrets"

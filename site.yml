@@ -1,0 +1,46 @@
+---
+# Simple Vault: 1 transit node + 3 Vault voters + HAProxy, built from roles.
+# Public URL: Let's Encrypt on HAProxy. Internally: self-signed TLS between every server.
+# Run:  ansible-playbook site.yml
+
+- name: Step 1 - Create TLS certificates (on your machine)
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+  roles:
+    - certs
+
+- name: Step 2 - Install Vault
+  hosts: transit:vault
+  roles:
+    - vault_install
+
+- name: Step 3 - Set up the transit node
+  hosts: transit
+  module_defaults:
+    ansible.builtin.uri:
+      ca_path: /etc/vault.d/tls/ca.crt
+  roles:
+    - transit
+
+- name: Step 4 - Set up the 3 Vault nodes
+  hosts: vault
+  module_defaults:
+    ansible.builtin.uri:
+      ca_path: /etc/vault.d/tls/ca.crt
+  roles:
+    - vault_cluster
+
+- name: Step 5 - Set up HAProxy with Let's Encrypt
+  hosts: lb
+  roles:
+    - haproxy
+
+- name: Step 6 - Check the cluster (on your machine)
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+  roles:
+    - check

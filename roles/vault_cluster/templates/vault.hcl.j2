@@ -1,0 +1,34 @@
+# Main Vault node (one of 3 voters)
+ui           = true
+api_addr     = "https://{{ private_ip | default(ansible_host) }}:8200"
+cluster_addr = "https://{{ private_ip | default(ansible_host) }}:8201"
+disable_mlock = true
+
+storage "raft" {
+  path    = "/opt/vault/data"
+  node_id = "{{ inventory_hostname }}"
+{% for peer in groups['vault'] if peer != inventory_hostname %}
+  retry_join {
+    leader_api_addr     = "https://{{ hostvars[peer]['private_ip'] | default(hostvars[peer]['ansible_host']) }}:8200"
+    leader_ca_cert_file = "/etc/vault.d/tls/ca.crt"
+  }
+{% endfor %}
+}
+
+listener "tcp" {
+  address         = "0.0.0.0:8200"
+  cluster_address = "0.0.0.0:8201"
+  tls_cert_file   = "/etc/vault.d/tls/vault.crt"
+  tls_key_file    = "/etc/vault.d/tls/vault.key"
+
+  # Trust HAProxy's X-Forwarded-For so audit logs show the real client IP
+  x_forwarded_for_authorized_addrs = "{{ vault_cluster_lb_ip }}"
+}
+
+# Auto-unseal using the transit node (token comes from vault.env)
+seal "transit" {
+  address     = "https://{{ vault_cluster_transit_ip }}:8200"
+  key_name    = "autounseal"
+  mount_path  = "transit/"
+  tls_ca_cert = "/etc/vault.d/tls/ca.crt"
+}

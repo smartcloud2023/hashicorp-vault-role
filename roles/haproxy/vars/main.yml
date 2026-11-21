@@ -1,0 +1,2 @@
+---
+haproxy_pem: "/etc/haproxy/certs/{{ public_domain }}.pem"

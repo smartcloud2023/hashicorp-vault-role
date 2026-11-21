@@ -1,0 +1,67 @@
+---
+- name: Write the Vault config
+  ansible.builtin.template:
+    src: vault.hcl.j2
+    dest: /etc/vault.d/vault.hcl
+    owner: vault
+    group: vault
+    mode: "0640"
+  notify: Restart vault
+
+- name: Give Vault the transit token
+  ansible.builtin.copy:
+    content: "VAULT_TOKEN={{ lookup('file', secrets_dir ~ '/autounseal-token') }}\n"
+    dest: /etc/vault.d/vault.env
+    owner: vault
+    group: vault
+    mode: "0600"
+  notify: Restart vault
+  no_log: true
+
+- name: Apply any config or certificate change before starting
+  ansible.builtin.meta: flush_handlers
+
+- name: Start Vault
+  ansible.builtin.systemd_service:
+    name: vault
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Wait for Vault to answer
+  ansible.builtin.uri:
+    url: "{{ vault_cluster_url }}/sys/seal-status"
+  register: vault_cluster_status
+  retries: 10
+  delay: 3
+  until: vault_cluster_status.status == 200
+
+- name: Initialise the cluster on vault-1 (first run only)
+  ansible.builtin.uri:
+    url: "{{ vault_cluster_url }}/sys/init"
+    method: PUT
+    body_format: json
+    body: { recovery_shares: 3, recovery_threshold: 2 }
+  register: vault_cluster_init
+  when:
+    - inventory_hostname == groups['vault'][0]
+    - not vault_cluster_status.json.initialized
+  no_log: true
+
+- name: Save recovery keys and root token on your machine
+  ansible.builtin.copy:
+    content: "{{ vault_cluster_init.json | to_nice_json }}"
+    dest: "{{ secrets_dir }}/vault-keys.json"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: vault_cluster_init is not skipped
+  no_log: true
+
+- name: Wait until every node has joined and unsealed
+  ansible.builtin.uri:
+    url: "{{ vault_cluster_url }}/sys/seal-status"
+  register: vault_cluster_sealed
+  retries: 30
+  delay: 5
+  until: vault_cluster_sealed.json.initialized and not vault_cluster_sealed.json.sealed

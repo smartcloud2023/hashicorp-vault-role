@@ -1,0 +1,39 @@
+# Public side:   Let's Encrypt certificate for https://{{ public_domain }}
+# Internal side: HAProxy -> Vault nodes over TLS, checked against the self-signed CA
+global
+    log /dev/log local0
+    daemon
+    ssl-default-bind-options ssl-min-ver TLSv1.2
+
+defaults
+    mode    http
+    log     global
+    option  httplog
+    timeout connect 5s
+    timeout client  5m
+    timeout server  5m
+
+# Port 80: Let's Encrypt checks go to certbot, everything else is redirected to HTTPS
+frontend http_in
+    bind *:80
+    acl letsencrypt path_beg /.well-known/acme-challenge/
+    use_backend certbot if letsencrypt
+    http-request redirect scheme https unless letsencrypt
+
+backend certbot
+    server certbot 127.0.0.1:8888
+
+# Port 443: public HTTPS with the Let's Encrypt certificate
+frontend https_in
+    bind *:443 ssl crt /etc/haproxy/certs/{{ public_domain }}.pem
+    option forwardfor
+    http-request set-header X-Forwarded-Proto https
+    default_backend vault_nodes
+
+# Internal TLS to Vault. Only the active node answers 200, so traffic goes straight to it.
+backend vault_nodes
+    option httpchk GET /v1/sys/health
+    http-check expect status 200
+{% for host in groups['vault'] %}
+    server {{ host }} {{ hostvars[host]['private_ip'] | default(hostvars[host]['ansible_host']) }}:8200 check ssl verify required ca-file /etc/haproxy/vault-ca.crt
+{% endfor %}

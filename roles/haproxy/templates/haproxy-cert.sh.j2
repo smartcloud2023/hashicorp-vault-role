@@ -1,0 +1,9 @@
+#!/bin/bash
+# Runs after Let's Encrypt issues or renews the certificate.
+# HAProxy needs the certificate and key in one file.
+set -e
+cat /etc/letsencrypt/live/{{ public_domain }}/fullchain.pem \
+    /etc/letsencrypt/live/{{ public_domain }}/privkey.pem \
+    > /etc/haproxy/certs/{{ public_domain }}.pem
+chmod 600 /etc/haproxy/certs/{{ public_domain }}.pem
+systemctl reload haproxy 2>/dev/null || true

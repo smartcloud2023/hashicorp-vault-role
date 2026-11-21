@@ -1,0 +1,77 @@
+---
+- name: Install HAProxy and certbot
+  ansible.builtin.package:
+    name: [haproxy, certbot]
+    state: present
+
+- name: Create the HAProxy certificate folder
+  ansible.builtin.file:
+    path: /etc/haproxy/certs
+    state: directory
+    mode: "0700"
+
+- name: Copy the internal CA so HAProxy can check the Vault certificates
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/ca.crt"
+    dest: /etc/haproxy/vault-ca.crt
+    mode: "0644"
+
+- name: Install the script that builds HAProxy's certificate file
+  ansible.builtin.template:
+    src: haproxy-cert.sh.j2
+    dest: /usr/local/bin/haproxy-cert.sh
+    mode: "0755"
+
+- name: Check whether we already have a Let's Encrypt certificate
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ public_domain }}/fullchain.pem"
+  register: haproxy_le_cert
+
+# First time only: HAProxy is stopped, so certbot answers on port 80 itself
+- name: Stop HAProxy for the first certificate request
+  ansible.builtin.systemd_service:
+    name: haproxy
+    state: stopped
+  when: not haproxy_le_cert.stat.exists
+
+- name: Get the Let's Encrypt certificate (first time only)
+  ansible.builtin.command: >
+    certbot certonly --standalone --non-interactive --agree-tos
+    -m {{ letsencrypt_email }} -d {{ public_domain }}
+    --deploy-hook /usr/local/bin/haproxy-cert.sh
+  args:
+    creates: "/etc/letsencrypt/live/{{ public_domain }}/fullchain.pem"
+
+- name: Build HAProxy's certificate file
+  ansible.builtin.command: /usr/local/bin/haproxy-cert.sh
+  args:
+    creates: "{{ haproxy_pem }}"
+
+- name: Write the HAProxy config
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    mode: "0644"
+    validate: haproxy -c -f %s
+  register: haproxy_cfg
+
+- name: Start HAProxy
+  ansible.builtin.systemd_service:
+    name: haproxy
+    state: "{{ 'restarted' if haproxy_cfg.changed else 'started' }}"
+    enabled: true
+
+# Renewals: certbot's built-in timer runs "certbot renew" twice a day.
+# HAProxy stays up and passes the Let's Encrypt check to certbot on port 8888.
+- name: Tell certbot to answer renewals on port 8888 (behind HAProxy)
+  ansible.builtin.lineinfile:
+    path: "/etc/letsencrypt/renewal/{{ public_domain }}.conf"
+    regexp: '^http01_port'
+    line: "http01_port = 8888"
+    insertafter: '^\[renewalparams\]'
+
+- name: Make sure the certbot renewal timer is on
+  ansible.builtin.systemd_service:
+    name: certbot.timer
+    state: started
+    enabled: true

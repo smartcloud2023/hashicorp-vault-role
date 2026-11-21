@@ -1,0 +1,84 @@
+---
+# Python 3.13+ rejects a CA without "key usage". Certificates made by older versions
+# of this role don't have it, so they are detected here and made again.
+- name: Check whether an existing CA is the old kind (no key usage)
+  ansible.builtin.command: openssl x509 -in {{ pki_dir }}/ca.crt -noout -ext keyUsage
+  register: certs_old_ca
+  changed_when: false
+  failed_when: false
+
+- name: Remove old certificates so new ones are made
+  ansible.builtin.file:
+    path: "{{ pki_dir }}"
+    state: absent
+  when: certs_old_ca.rc == 0 and 'Certificate Sign' not in certs_old_ca.stdout
+
+- name: Create folders
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop: ["{{ pki_dir }}", "{{ secrets_dir }}"]
+
+- name: Create the CA (valid 10 years)
+  ansible.builtin.command: >
+    openssl req -x509 -newkey rsa:4096 -nodes -days 3650
+    -keyout {{ pki_dir }}/ca.key -out {{ pki_dir }}/ca.crt
+    -subj "/CN=Vault Internal CA"
+    -addext "basicConstraints=critical,CA:TRUE"
+    -addext "keyUsage=critical,keyCertSign,cRLSign"
+    -addext "subjectKeyIdentifier=hash"
+  args:
+    creates: "{{ pki_dir }}/ca.crt"
+
+- name: Write the certificate names (SANs) for each server
+  ansible.builtin.copy:
+    dest: "{{ pki_dir }}/{{ item }}.ext"
+    mode: "0600"
+    content: |
+      subjectAltName = DNS:{{ item }}, {{ certs_ips | unique | map('regex_replace', '^', 'IP:') | join(', ') }}
+      basicConstraints = critical, CA:FALSE
+      keyUsage = critical, digitalSignature, keyEncipherment
+      extendedKeyUsage = serverAuth, clientAuth
+      subjectKeyIdentifier = hash
+      authorityKeyIdentifier = keyid, issuer
+  loop: "{{ groups['transit'] + groups['vault'] }}"
+  vars:
+    # private IP (Vault traffic), public IP (Ansible), and localhost
+    certs_ips: "{{ [hostvars[item]['private_ip'] | default(hostvars[item]['ansible_host']), hostvars[item]['ansible_host'], '127.0.0.1'] }}"
+
+- name: Create a key and certificate request for each server
+  ansible.builtin.command: >
+    openssl req -newkey rsa:2048 -nodes
+    -keyout {{ pki_dir }}/{{ item }}.key -out {{ pki_dir }}/{{ item }}.csr
+    -subj "/CN={{ item }}"
+  args:
+    creates: "{{ pki_dir }}/{{ item }}.key"
+  loop: "{{ groups['transit'] + groups['vault'] }}"
+
+- name: Sign each certificate with the CA (valid 1 year)
+  ansible.builtin.command: >
+    openssl x509 -req -in {{ pki_dir }}/{{ item }}.csr
+    -CA {{ pki_dir }}/ca.crt -CAkey {{ pki_dir }}/ca.key -CAcreateserial
+    -days 365 -extfile {{ pki_dir }}/{{ item }}.ext
+    -out {{ pki_dir }}/{{ item }}.crt
+  args:
+    creates: "{{ pki_dir }}/{{ item }}.crt"
+  loop: "{{ groups['transit'] + groups['vault'] }}"
+
+- name: Check every certificate and key was created and is readable
+  ansible.builtin.stat:
+    path: "{{ pki_dir }}/{{ item }}"
+  loop: "{{ ['ca.crt'] + (groups['transit'] + groups['vault']) | product(['.crt', '.key']) | map('join') | list }}"
+  register: certs_files
+
+- name: Stop here if anything is missing or unreadable
+  ansible.builtin.assert:
+    that: certs_files.results | rejectattr('stat.readable', 'defined') | list | length == 0
+          and certs_files.results | rejectattr('stat.readable') | list | length == 0
+    fail_msg: >-
+      Missing or unreadable in {{ pki_dir }}:
+      {{ certs_files.results | rejectattr('stat.readable', 'defined') | map(attribute='item') | list
+         + certs_files.results | selectattr('stat.readable', 'defined') | rejectattr('stat.readable') | map(attribute='item') | list }}.
+      If the files are owned by root, run: sudo chown -R $USER {{ playbook_dir }}
+    quiet: true

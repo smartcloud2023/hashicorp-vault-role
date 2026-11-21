@@ -1,0 +1,6 @@
+---
+# Restart Vault only if it is already running, so it picks up new certificates or config.
+# (A restarted transit node is unsealed again by the transit role.)
+- name: Restart vault
+  ansible.builtin.command: systemctl try-restart vault
+  changed_when: true

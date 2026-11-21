@@ -1,0 +1,68 @@
+---
+- name: Install unzip
+  ansible.builtin.package:
+    name: unzip
+    state: present
+
+- name: Create the vault user
+  ansible.builtin.user:
+    name: vault
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create Vault folders
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: vault
+    group: vault
+    mode: "0750"
+  loop: [/etc/vault.d, /etc/vault.d/tls, /opt/vault/data]
+
+- name: Download the Vault zip to your machine if it is not there yet
+  ansible.builtin.get_url:
+    url: "https://releases.hashicorp.com/vault/{{ vault_version }}/{{ vault_zip }}"
+    dest: "{{ playbook_dir }}/files/{{ vault_zip }}"
+    checksum: "sha256:https://releases.hashicorp.com/vault/{{ vault_version }}/vault_{{ vault_version }}_SHA256SUMS"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Install the Vault binary
+  ansible.builtin.unarchive:
+    src: "{{ playbook_dir }}/files/{{ vault_zip }}"
+    dest: /usr/local/bin
+    creates: /usr/local/bin/vault
+    mode: "0755"
+
+- name: Copy the CA and this server's certificate and key
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/{{ item.src }}"
+    dest: "/etc/vault.d/tls/{{ item.dest }}"
+    owner: vault
+    group: vault
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: ca.crt, dest: ca.crt, mode: "0644" }
+    - { src: "{{ inventory_hostname }}.crt", dest: vault.crt, mode: "0644" }
+    - { src: "{{ inventory_hostname }}.key", dest: vault.key, mode: "0600" }
+
+- name: Trust the CA on this server
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/ca.crt"
+    dest: /usr/local/share/ca-certificates/vault-ca.crt
+    mode: "0644"
+  register: vault_install_ca_copied
+
+- name: Update the trust store
+  ansible.builtin.command: update-ca-certificates  # noqa: no-handler
+  when: vault_install_ca_copied.changed
+  changed_when: true
+
+- name: Install the systemd service
+  ansible.builtin.template:
+    src: vault.service.j2
+    dest: /etc/systemd/system/vault.service
+    mode: "0644"
