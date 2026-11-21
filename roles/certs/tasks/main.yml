@@ -43,9 +43,19 @@
       subjectKeyIdentifier = hash
       authorityKeyIdentifier = keyid, issuer
   loop: "{{ groups['transit'] + groups['vault'] }}"
+  register: certs_ext
   vars:
-    # private IP (Vault traffic), public IP (Ansible), and localhost
+    # private IP (Vault traffic), the IP Ansible uses, and localhost
     certs_ips: "{{ [hostvars[item]['private_ip'] | default(hostvars[item]['ansible_host']), hostvars[item]['ansible_host'], '127.0.0.1'] }}"
+
+- name: Remove a server's certificate when its names/IPs changed, so it is signed again
+  ansible.builtin.file:
+    path: "{{ pki_dir }}/{{ item.item }}.crt"
+    state: absent
+  loop: "{{ certs_ext.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.changed
 
 - name: Create a key and certificate request for each server
   ansible.builtin.command: >
