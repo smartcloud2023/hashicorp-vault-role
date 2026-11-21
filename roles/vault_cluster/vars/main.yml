@@ -3,3 +3,5 @@ vault_cluster_url: "https://{{ private_ip | default(ansible_host) }}:8200/v1"
 # Private IP if set in the inventory, otherwise the public one
 vault_cluster_lb_ip: "{{ hostvars[groups['lb'][0]]['private_ip'] | default(hostvars[groups['lb'][0]]['ansible_host']) }}"
 vault_cluster_transit_ip: "{{ hostvars[groups['transit'][0]]['private_ip'] | default(hostvars[groups['transit'][0]]['ansible_host']) }}"
+# AWS Secrets Manager name of the transit token
+vault_cluster_sm_token: "{{ aws_secret_prefix }}/autounseal-token"

@@ -1,2 +1,5 @@
 ---
 transit_url: "https://{{ private_ip | default(ansible_host) }}:8200/v1"
+# AWS Secrets Manager names
+transit_sm_keys: "{{ aws_secret_prefix }}/transit-keys"
+transit_sm_token: "{{ aws_secret_prefix }}/autounseal-token"

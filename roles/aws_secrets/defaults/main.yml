@@ -1,0 +1,9 @@
+---
+# Set to true (or pass -e aws_secrets_delete_local=true) to delete the local
+# copies once they are safely stored in AWS Secrets Manager.
+aws_secrets_delete_local: false
+
+aws_secrets_files:
+  - { file: transit-keys.json, name: transit-keys }
+  - { file: vault-keys.json, name: vault-keys }
+  - { file: autounseal-token, name: autounseal-token }

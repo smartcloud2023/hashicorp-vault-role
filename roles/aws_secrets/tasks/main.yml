@@ -1,0 +1,50 @@
+---
+# One-off move: copy the files in secrets/ on Master-Node into AWS Secrets Manager.
+- name: Find local secret files
+  ansible.builtin.stat:
+    path: "{{ secrets_dir }}/{{ item.file }}"
+  loop: "{{ aws_secrets_files }}"
+  loop_control:
+    label: "{{ item.file }}"
+  register: aws_secrets_local
+
+- name: Copy each local secret into AWS Secrets Manager (never overwrites)
+  community.aws.secretsmanager_secret:
+    name: "{{ aws_secret_prefix }}/{{ item.item.name }}"
+    description: "Moved from Master-Node {{ item.item.file }}"
+    secret: "{{ lookup('ansible.builtin.file', item.stat.path) }}"
+    region: "{{ aws_region }}"
+    overwrite: false
+  loop: "{{ aws_secrets_local.results }}"
+  loop_control:
+    label: "{{ item.item.file }} -> {{ aws_secret_prefix }}/{{ item.item.name }}"
+  when: item.stat.exists
+  no_log: true
+
+- name: Read each one back to confirm it is in AWS
+  ansible.builtin.set_fact:
+    aws_secrets_check: "{{ aws_secrets_check | default({}) | combine({item.name: aws_secrets_value | length > 0}) }}"
+  vars:
+    aws_secrets_value: "{{ query('amazon.aws.aws_secret', aws_secret_prefix ~ '/' ~ item.name, region=aws_region, on_missing='skip') | first | default('') }}"
+  loop: "{{ aws_secrets_files }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Show what is stored in AWS
+  ansible.builtin.debug:
+    msg: "{{ aws_secret_prefix }}/{{ item.key }} stored in AWS: {{ item.value }}"
+  loop: "{{ aws_secrets_check | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Delete the local copies (only when asked and only if stored in AWS)
+  ansible.builtin.file:
+    path: "{{ secrets_dir }}/{{ item.file }}"
+    state: absent
+  loop: "{{ aws_secrets_files }}"
+  loop_control:
+    label: "{{ item.file }}"
+  when:
+    - aws_secrets_delete_local | bool
+    - aws_secrets_check[item.name]

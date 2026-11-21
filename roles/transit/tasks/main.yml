@@ -38,19 +38,21 @@
   when: not transit_status.json.initialized
   no_log: true
 
-- name: Save unseal keys and root token on your machine
-  ansible.builtin.copy:
-    content: "{{ transit_init.json | to_nice_json }}"
-    dest: "{{ secrets_dir }}/transit-keys.json"
-    mode: "0600"
+- name: Save unseal keys and root token in AWS Secrets Manager
+  community.aws.secretsmanager_secret:
+    name: "{{ aws_secret_prefix }}/transit-keys"
+    description: Transit node unseal keys and root token
+    json_secret: "{{ transit_init.json }}"
+    region: "{{ aws_region }}"
+    overwrite: false
   delegate_to: localhost
   become: false
   when: not transit_status.json.initialized
   no_log: true
 
-- name: Load the saved keys
+- name: Load the keys from AWS Secrets Manager
   ansible.builtin.set_fact:
-    transit_keys: "{{ lookup('file', secrets_dir ~ '/transit-keys.json') | from_json }}"
+    transit_keys: "{{ query('amazon.aws.aws_secret', transit_sm_keys, region=aws_region, on_missing='error') | first | default('') | from_json }}"
   no_log: true
 
 - name: Unseal the transit node
@@ -93,12 +95,10 @@
     status_code: 204
   no_log: true
 
-- name: Check whether a token already exists
-  ansible.builtin.stat:
-    path: "{{ secrets_dir }}/autounseal-token"
-  delegate_to: localhost
-  become: false
-  register: transit_token_file
+- name: Check whether a token already exists in AWS Secrets Manager
+  ansible.builtin.set_fact:
+    transit_token_existing: "{{ query('amazon.aws.aws_secret', transit_sm_token, region=aws_region, on_missing='skip') | first | default('') }}"
+  no_log: true
 
 - name: Create the token the Vault nodes use to unseal
   ansible.builtin.uri:
@@ -108,15 +108,17 @@
     body_format: json
     body: { policies: [autounseal], period: 24h, no_default_policy: true }
   register: transit_token
-  when: not transit_token_file.stat.exists
+  when: transit_token_existing | length == 0
   no_log: true
 
-- name: Save the token on your machine
-  ansible.builtin.copy:
-    content: "{{ transit_token.json.auth.client_token }}"
-    dest: "{{ secrets_dir }}/autounseal-token"
-    mode: "0600"
+- name: Save the token in AWS Secrets Manager
+  community.aws.secretsmanager_secret:
+    name: "{{ aws_secret_prefix }}/autounseal-token"
+    description: Token the Vault nodes use to auto-unseal through transit
+    secret: "{{ transit_token.json.auth.client_token }}"
+    region: "{{ aws_region }}"
+    overwrite: false
   delegate_to: localhost
   become: false
-  when: not transit_token_file.stat.exists
+  when: transit_token_existing | length == 0
   no_log: true

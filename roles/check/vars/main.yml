@@ -1,0 +1,2 @@
+---
+check_sm_keys: "{{ aws_secret_prefix }}/vault-keys"

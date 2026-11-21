@@ -3,8 +3,9 @@
   ansible.builtin.uri:
     url: "https://{{ public_domain }}/v1/sys/storage/raft/configuration"
     headers:
-      X-Vault-Token: "{{ (lookup('file', secrets_dir ~ '/vault-keys.json') | from_json).root_token }}"
+      X-Vault-Token: "{{ (query('amazon.aws.aws_secret', check_sm_keys, region=aws_region, on_missing='error') | first | default('') | from_json).root_token }}"
   register: check_peers
+  no_log: true
 
 - name: Show the cluster
   ansible.builtin.debug:
@@ -15,4 +16,4 @@
 
 - name: Done
   ansible.builtin.debug:
-    msg: "Vault is ready at https://{{ public_domain }}  (keys are in {{ secrets_dir }} - move them somewhere safe)"
+    msg: "Vault is ready at https://{{ public_domain }}  (keys are in AWS Secrets Manager under {{ aws_secret_prefix }}/)"

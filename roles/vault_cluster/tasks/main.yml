@@ -10,7 +10,7 @@
 
 - name: Give Vault the transit token
   ansible.builtin.copy:
-    content: "VAULT_TOKEN={{ lookup('file', secrets_dir ~ '/autounseal-token') }}\n"
+    content: "VAULT_TOKEN={{ query('amazon.aws.aws_secret', vault_cluster_sm_token, region=aws_region, on_missing='error') | first | default('') }}\n"
     dest: /etc/vault.d/vault.env
     owner: vault
     group: vault
@@ -48,11 +48,13 @@
     - not vault_cluster_status.json.initialized
   no_log: true
 
-- name: Save recovery keys and root token on your machine
-  ansible.builtin.copy:
-    content: "{{ vault_cluster_init.json | to_nice_json }}"
-    dest: "{{ secrets_dir }}/vault-keys.json"
-    mode: "0600"
+- name: Save recovery keys and root token in AWS Secrets Manager
+  community.aws.secretsmanager_secret:
+    name: "{{ aws_secret_prefix }}/vault-keys"
+    description: Vault cluster recovery keys and root token
+    json_secret: "{{ vault_cluster_init.json }}"
+    region: "{{ aws_region }}"
+    overwrite: false
   delegate_to: localhost
   become: false
   when: vault_cluster_init is not skipped

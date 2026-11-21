@@ -1,0 +1,6 @@
+---
+# Needed for AWS Secrets Manager. Install with:
+#   ansible-galaxy collection install -r requirements.yml
+collections:
+  - name: amazon.aws
+  - name: community.aws
