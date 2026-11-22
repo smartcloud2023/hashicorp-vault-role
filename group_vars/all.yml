@@ -29,4 +29,4 @@ secrets_dir: "{{ playbook_dir }}/secrets"
 # AWS Secrets Manager (keys and tokens are stored here, not on Master-Node).
 # Master-Node needs an IAM role with docs/iam-policy-master-node.json attached.
 aws_region: us-west-1
-aws_secret_prefix: hashicorp-vault
+aws_secret_prefix: hashicorp-vault0
