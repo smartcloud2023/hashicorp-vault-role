@@ -11,8 +11,8 @@ transit_key_threshold: 2
 # Public URL served by HAProxy with a Let's Encrypt certificate.
 # Its DNS A record must point at the load balancer, and port 80 must be reachable
 # from the internet so Let's Encrypt can check it (HTTP-01).
-public_domain: group3assessment.online
-letsencrypt_email: admin@example.com
+public_domain: vault.group3assessment.online
+letsencrypt_email: chukwunonsosmartagbawo@gmail.com
 
 # IP that Vault traffic uses between servers: private_ip from the inventory if set
 # (recommended on AWS), otherwise the IP Ansible connects to.
